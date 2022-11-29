@@ -59,7 +59,7 @@ docker_kill() {
   local container_id="$1"
   local DATE=$(date +%d-%m-%Y" "%H:%M:%S)
   docker_curl -X POST "${HTTP_ENDPOINT}/containers/${container_id}/kill" \
-   && echo "$DATE [INFO] killed ${container_id}" || echo "$DATE [ERROR] killing ${container_id}" 
+   && echo "$DATE [INFO] killed ${container_id}" || echo "$DATE [ERROR] killing ${container_id}"
 }
 
 docker_start() {
@@ -201,7 +201,7 @@ generate_webhook_payload() {
   cat <<EOF
 {
   "text":"$text"
-} 
+}
 EOF
 }
 
@@ -244,9 +244,9 @@ if [ "$1" = "autoheal" ] && [ -e "$DOCKER_SOCK" ];then
         echo "$DATE Container $CONTAINER_NAME (${CONTAINER_SHORT_ID}) found to be unhealthy"
         if restart_stack "${CONTAINER_NAME}" 90
         then
-          notify_webhook "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Successfully restarted the container!" &
+          notify_webhook "Container ${CONTAINER_NAME} (${CONTAINER_SHORT_ID}) found to be unhealthy. Successfully restarted the container!" &
         else
-          notify_webhook "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Failed to restart the container!" &
+          notify_webhook "Container ${CONTAINER_NAME} (${CONTAINER_SHORT_ID}) found to be unhealthy. Failed to restart the container!" &
         fi
       fi
     done

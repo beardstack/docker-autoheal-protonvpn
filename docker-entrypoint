@@ -6,7 +6,7 @@ set -o pipefail
 
 DOCKER_SOCK=${DOCKER_SOCK:-/var/run/docker.sock}
 UNIX_SOCK=""
-CURL_TIMEOUT=${CURL_TIMEOUT:-30}
+CURL_TIMEOUT=${CURL_TIMEOUT:-60}
 WEBHOOK_URL=${WEBHOOK_URL:-""}
 
 # only use unix domain socket if no TCP endpoint is defined
@@ -21,13 +21,13 @@ case "${DOCKER_SOCK}" in
              ;;
 esac
 
-AUTOHEAL_CONTAINER_LABEL=${AUTOHEAL_CONTAINER_LABEL:-autoheal}
+AUTOHEAL_CONTAINER_LABEL=${AUTOHEAL_CONTAINER_LABEL:-autoheal_vpn}
 AUTOHEAL_START_PERIOD=${AUTOHEAL_START_PERIOD:-0}
 AUTOHEAL_INTERVAL=${AUTOHEAL_INTERVAL:-5}
 AUTOHEAL_DEFAULT_STOP_TIMEOUT=${AUTOHEAL_DEFAULT_STOP_TIMEOUT:-10}
 
 docker_curl() {
-  curl --max-time "${CURL_TIMEOUT}" --no-buffer -s \
+  curl --max-time "${CURL_TIMEOUT}" --no-buffer --silent \
   ${CA} ${CLIENT_KEY} ${CLIENT_CERT} \
   ${UNIX_SOCK} \
   "$@"
@@ -49,13 +49,141 @@ get_container_info() {
   docker_curl "$url"
 }
 
+docker_stop() {
+  local container_id="$1"
+  local DATE=$(date +%d-%m-%Y" "%H:%M:%S)
+  docker_curl -X POST "${HTTP_ENDPOINT}/containers/${container_id}/stop" && echo "${DATE} [INFO] STOPPED ${container_id}" || echo "${DATE} [ERROR] stopping ${container_id}" 
+}
+
+docker_kill() {
+  local container_id="$1"
+  local DATE=$(date +%d-%m-%Y" "%H:%M:%S)
+  docker_curl -X POST "${HTTP_ENDPOINT}/containers/${container_id}/kill" \
+   && echo "$DATE [INFO] killed ${container_id}" || echo "$DATE [ERROR] killing ${container_id}" 
+}
+
+docker_start() {
+  local container_id="$1"
+  local timeout=90
+  local DATE=$(date +%d-%m-%Y" "%H:%M:%S)
+
+  (curl --silent --max-time "${timeout}" --unix-socket /var/run/docker.sock -X POST "${HTTP_ENDPOINT}/containers/${container_id}/start" \
+  && echo "$DATE [INFO] started ${container_id}") \
+  || echo "$DATE [ERROR] starting ${container_id}"
+}
+
+
+docker_restart() {
+  local container_id="$1"
+  local timeout=90
+  local DATE=$(date +%d-%m-%Y" "%H:%M:%S)
+
+  (curl --silent --max-time "${timeout}" --unix-socket /var/run/docker.sock -X POST "${HTTP_ENDPOINT}/containers/${container_id}/restart" \
+  && echo "$DATE [INFO] restarted ${container_id}") \
+  || echo "$DATE [ERROR] restarting ${container_id}"
+}
+
+docker_container_status() {
+  local container_id="$1"
+  local DATE=$(date +%d-%m-%Y" "%H:%M:%S)
+  curl --silent --max-time "${timeout}" --unix-socket /var/run/docker.sock -X GET "${HTTP_ENDPOINT}/containers/${container_id}/json" | jq '.State.Status'
+}
+
+docker_container_health() {
+  local container_id="$1"
+  local DATE=$(date +%d-%m-%Y" "%H:%M:%S)
+  curl --silent --max-time "${timeout}" --unix-socket /var/run/docker.sock -X GET "${HTTP_ENDPOINT}/containers/${container_id}/json" | jq '.State.Health.Status'
+}
+
+
+# shellcheck disable=2039
+restart_stack() {
+
+  local container_id="$1"
+  local timeout=90
+  local DATE=$(date +%d-%m-%Y" "%H:%M:%S)
+  echo "$DATE Restarting $container_id stack ... "
+
+
+  # Check status of VPN container.
+  VPN_STATUS=$(docker_container_status "${container_id}_protonvpn")
+
+
+  if [ "${VPN_STATUS}" == "exited" ]
+  then
+   #Stopped container
+   echo "$DATE ${container_id}_protonvpn is Not Running, Starting ${container_id}_protonvpn" &2>
+   docker_start "${container_id}_protonvpn"
+  else
+   #Silent failure
+   echo "$DATE ${container_id}_protonvpn is ${VPN_STATUS}; Silent Failure Maybe? Restarting ${container_id}_protonvpn"
+   docker_restart "${container_id}_protonvpn"
+  fi
+  echo "$DATE restarting ${container_id}"
+  docker_restart "${container_id}"
+
+
+  ##Waiting for container start
+  #echo "$DATE Entering Loop"
+  #while true
+  #do
+      #VPN_STATUS=$(docker_container_status "${container_id}_protonvpn")
+      #DATE=$(date +%d-%m-%Y" "%H:%M:%S)
+      #echo -n "."
+      #if [ "${VPN_STATUS}" == "exited" ]
+      #then
+        #echo "$DATE restarting ${container_id}_protonvpn"
+        #docker_restart "${container_id}_protonvpn" "$timeout"
+      #fi
+
+      #if [ "${VPN_STATUS}" == "running" ]
+      #then
+        ##Running!
+        #echo "$DATE Container Running: Waiting for healthcheck..."
+        #HEALTH_CHECK=$(docker_container_health "${container_id}_protonvpn")
+      #else
+       #continue
+      #fi
+
+      #if [ "${HEALTH_CHECK}" == "healthy" ]
+      #then
+        ##ProtonVPN healthy, restart main container
+        #APP_STATUS=$(docker_container_status "${container_id}_protonvpn")
+        #if [ "${APP_STATUS}" == "exited" ]
+        #then
+          #echo "$DATE ProtonVPN container healthy... Restarting app ${container_id}"
+          #docker_restart "${container_id}"
+        #elif [ "${APP_STATUS}" = "running" ]
+        #then
+          ##App is up
+          #echo "$DATE Stack Restarted"
+          #APP_HEALTH_CHECK=$(docker_container_health "${container_id}")
+          #if [ "${APP_HEALTH_CHECK}" == "unhealthy" ]
+          #then
+            #echo "$DATE App Container Stack restarted but unhealthy; Exiting loop" >&2
+          #fi
+          #break
+        #else
+          ##Still starting up.
+          #continue
+        #fi
+      #fi
+      #sleep 3
+  #done
+
+}
+
+
 # shellcheck disable=2039
 restart_container() {
   local container_id="$1"
   local timeout="$2"
+  echo "$DATE Restarting $container_id ... "
+  docker_curl -X POST "${HTTP_ENDPOINT}/containers/${container_id}/restart?t=${timeout}" && \
+  echo "$DATE Restarted $container_id" || echo "$DATE [Error] restarting $1"
 
-  docker_curl -f -X POST "${HTTP_ENDPOINT}/containers/${container_id}/restart?t=${timeout}"
 }
+
 
 notify_webhook() {
   local text="$@"
@@ -111,13 +239,14 @@ if [ "$1" = "autoheal" ] && [ -e "$DOCKER_SOCK" ];then
       then
         echo "$DATE Container $CONTAINER_NAME (${CONTAINER_SHORT_ID}) found to be restarting - don't restart"
       else
-        echo "$DATE Container $CONTAINER_NAME (${CONTAINER_SHORT_ID}) found to be unhealthy - Restarting container now with ${TIMEOUT}s timeout"
-        if ! restart_container "$CONTAINER_ID" "$TIMEOUT"
+        #strip out leading "/"
+        CONTAINER_NAME=${CONTAINER_NAME:1}
+        echo "$DATE Container $CONTAINER_NAME (${CONTAINER_SHORT_ID}) found to be unhealthy"
+        if restart_stack "${CONTAINER_NAME}" 90
         then
-          echo "$DATE Restarting container $CONTAINER_SHORT_ID failed" >&2
-          notify_webhook "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Failed to restart the container!" &
-        else 
           notify_webhook "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Successfully restarted the container!" &
+        else
+          notify_webhook "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Failed to restart the container!" &
         fi
       fi
     done
